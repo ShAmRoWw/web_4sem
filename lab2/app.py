@@ -55,14 +55,14 @@ def phone():
     error = None
     format_phone = ''
     if request.method == "POST":
-        additional_symvols = [' ', '(', ')', '-', '.', '+']
+        additional_symbols = [' ', '(', ')', '-', '.', '+']
 
         phone_num = request.form['phone']
 
         digits = [i for i in phone_num if i.isdigit()]
 
         for i in phone_num:
-            if i.isdigit() == False and i not in additional_symvols:
+            if i.isdigit() == False and i not in additional_symbols:
                 error = 'Недопустимый ввод. В номере телефона встречаются недопустимые символы.'
                 return render_template('phone.html', error=error)
 
