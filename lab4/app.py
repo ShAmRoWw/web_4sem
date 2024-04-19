@@ -1,7 +1,8 @@
 from flask import Flask, render_template,url_for, request, session, redirect, flash
-from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from mysql_db import MySQL
-import string
+import re
+import hashlib
 
 
 app = Flask(__name__)
@@ -21,21 +22,24 @@ application = app
 app.config.from_pyfile('config.py')
 
 class User(UserMixin):
-    def __init__(self, user_id, login):
+    def __init__(self, user_id, login, password_hash=None, first_name=None, last_name=None):
         self.id = user_id
         self.login = login
+        self.password_hash = password_hash
+        self.first_name = first_name
+        self.last_name = last_name
 
     
 
 @login_manager.user_loader
 def load_user(user_id):
     cursor = db.connection().cursor(named_tuple=True)
-    query = 'SELECT id, login FROM users3 WHERE users3.id = %s'
+    query = 'SELECT id, login, password_hash, first_name, last_name FROM users3 WHERE users3.id = %s'
     cursor.execute(query, (user_id,))
     user = cursor.fetchone()
     cursor.close()
     if user:
-        return User(user.id, user.login)
+        return User(user.id, user.login, user.password_hash, user.first_name, user.last_name)
     return None
 
 @app.route('/')
@@ -49,16 +53,10 @@ def auth():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
-    error_login = None
-    error_passwd = None
     if request.method == 'POST':
         login = request.form['login']
         password = request.form['password']
         remember = request.form.get('remember') == 'on'
-        if check_login(login) != None or check_passwd(password) != None:
-            error_login = check_login(login)
-            error_passwd = check_passwd(password)
-            return render_template('login.html', error_login=error_login, error_passwd=error_passwd)
         cursor = db.connection().cursor(named_tuple=True)
         query = 'SELECT * FROM users3 WHERE users3.login = %s and users3.password_hash = SHA2(%s, 256)'
         cursor.execute(query, (login,password))
@@ -88,40 +86,10 @@ def userlist():
     cursor.close()
     return render_template('userlist.html', users=users)
 
-def check_login(login):
-    if len(login) < 5:
-        return 'Длина логина не может быть меньше 5'
-    
-    elif not all([char in string.ascii_letters and char in string.digits for char in login]):
-        return 'Логин должен состоять только из латинских букв и цифр'
-    
-    return None
-
-def check_passwd(passwd):
-    upper_letters = string.ascii_uppercase + 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ'
-    lower_letters = string.ascii_lowercase + 'абвгдеёжзийклмнопрстуфхцчшщъыьэюя'
-    perm_letters = '~!?@#$%^&*_-+()[]{}\\></\\|\"\'.,:;'
-
-    if len(passwd) < 8:
-        return 'Пароль должен содержать не менее 8 символов'
-    elif len(passwd) > 128:
-        return 'Пароль не должен превышать 128 символов'
-    elif not any([char in upper_letters for char in passwd]) and not any([char in lower_letters for char in passwd]):
-        return 'Пароль должен состоять как минимум из одной заглавной и одной строчной буквы'
-    elif not all([char in (upper_letters + lower_letters + perm_letters) for char in passwd]):
-        return 'Пароль должен состоять только из латинских или кириллических букв'
-    elif not any([char in string.digits for char in passwd]):
-        return 'Пароль должен состоять хотя бы из одной цифры'
-    elif ' ' in passwd:
-        return 'Пароль не должен содержать пробелы'
-    
-    return None
 
 @app.route('/createuser', methods=["GET", "POST"])
 @login_required
 def createuser():
-    error_login = None
-    error_passwd = None
     if request.method == 'GET':
         return render_template('createuser.html')
     elif request.method == "POST":
@@ -129,10 +97,11 @@ def createuser():
         first_name = request.form['first_name']
         last_name = request.form['last_name']
         password = request.form['password']
-        if check_login(login) != None or check_passwd(password) != None:
-            error_login = check_login(login)
-            error_passwd = check_passwd(password)
-            return render_template('createuser.html', error_login=error_login, error_passwd=error_passwd)
+        errors = validate_user_data(login, password, first_name, last_name)
+        if errors:
+            for error in errors.items():
+                flash(f'{error}', 'danger')
+            return render_template('createuser.html', login=login, first_name=first_name, last_name=last_name)
         cursor = db.connection().cursor(named_tuple=True)
         query = 'INSERT INTO users3 (login, password_hash, first_name, last_name) VALUES (%s, SHA2(%s, 256), %s, %s)'
         values = (login, password, first_name, last_name)
@@ -141,7 +110,6 @@ def createuser():
         cursor.close()
         flash('Пользователь успешно создан','success')
         return redirect(url_for('userlist'))
-
 
 @app.route('/user/show/<int:user_id>')
 @login_required
@@ -178,7 +146,6 @@ def edit_user(user_id):
     cursor.close()
     return render_template('edit_user.html', user=user)
 
-
 @app.route('/user/delete/<int:user_id>', methods=["GET", "POST"])
 @login_required
 def delete_user(user_id):
@@ -199,43 +166,56 @@ def delete_user(user_id):
     cursor.close()
     return render_template('delete_user.html', user=user)
 
-@app.route('/user/change/<int:user_id>', methods=["GET", "POST"])
+def validate_user_data(login, password, first_name, last_name):
+    errors = {}
+    if not login or not password or not first_name or not last_name:
+        if not login:
+            errors['login'] = "Логин не может быть пустым"
+        if not password:
+            errors['password'] = "Пароль не может быть пустым"
+        if not first_name:
+            errors['first_name'] = "Имя не может быть пустым"
+        if not last_name:
+            errors['last_name'] = "Фамилия не может быть пустой"
+    if login and (len(login) < 5 or not re.match("^[a-zA-Z0-9]+$", login)):
+        errors['login'] = "Логин должен состоять только из латинских букв и цифр и иметь длину не менее 5 символов"
+    if password and (len(password) < 8 or len(password) > 128 or not re.search(r"[a-zA-Zа-яА-Я]", password) or not re.search(r"[0-9]", password) or ' ' in password or not re.search(r"[~!?@#$%^&*()_+\[\]{}><\\|\"',.:;/-]", password)):
+        errors['password'] = "Пароль должен быть от 8 до 128 символов, содержать минимум одну заглавную и одну строчную букву, одну цифру и допустимые спецсимволы"
+    return errors
+
+@app.route('/change_password/<int:user_id>', methods=["GET", "POST"])
 @login_required
 def change_password(user_id):
-    error_old_passwd = None
-    error_new_passwd = None
-    error_both_passwd = None
     if request.method == 'POST':
-        cursor = db.connection().cursor(named_tuple=True)
         old_password = request.form['old_password']
         new_password = request.form['new_password']
-        new_rep_password = request.form['new_rep_password']
-        query = 'SELECT password_hash FROM users3 WHERE id=%s'
-
-        if old_password != query:
-            error_old_passwd = 'Неправильный текущий пароль'
-            return render_template('change_password.html', error_old_passwd=error_old_passwd)
-
-        if check_passwd(new_password) != None:
-            error_new_passwd = check_passwd(new_password)
-            return render_template('change_password.html', error_new_passwd=error_new_passwd)
+        confirm_password = request.form['confirm_password']
         
-        elif check_passwd(new_password) != new_rep_password:
-            error_both_passwd = 'Пароли не совпадают'
-            return render_template('change_password.html', error_both_passwd=error_both_passwd)
+        user = load_user(user_id)
+        if not user or not check_password_hash(user.password_hash, old_password):
+            flash('Старый пароль указан неверно', 'danger')
+            return render_template('change_password.html')
         
-        #query = 'UPDATE users3 SET first_name=%s, last_name=%s, middle_name=%s WHERE id=%s'
-        #query = 'INSERT INTO users3 (login, password_hash, first_name, last_name) VALUES (%s, SHA2(%s, 256), %s, %s)'
+        if new_password != confirm_password:
+            flash('Пароли не совпадают', 'danger')
+            return render_template('change_password.html')
+
+        errors = validate_user_data(user.login, new_password, user.first_name, user.last_name)
+        if errors:
+            for error in errors.items():
+                flash(f'{error}', 'danger')
+            return render_template('change_password.html')
+        
+        cursor = db.connection().cursor(named_tuple=True)
         query = 'UPDATE users3 SET password_hash=SHA2(%s, 256) WHERE id=%s'
-        cursor.execute(query, (new_password, user_id))
+        cursor.execute(query, (new_password, user.id))
         db.connection().commit()
         cursor.close()
-        flash(f'Пароль пользователя {login} изменен','success')
-        return redirect(url_for('userlist'))
-    
-    cursor = db.connection().cursor(named_tuple=True)
-    query = 'SELECT id, login, first_name, last_name FROM users3 WHERE id=%s'
-    cursor.execute(query, (user_id,))
-    user = cursor.fetchone()
-    cursor.close()
-    return render_template('change_password.html', user=user)
+        flash('Пароль успешно изменен', 'success')
+        return redirect(url_for('index'))
+
+    return render_template('change_password.html')
+
+def check_password_hash(stored_password_hash, provided_password):
+    provided_password_hash = hashlib.sha256(provided_password.encode()).hexdigest()
+    return provided_password_hash == stored_password_hash

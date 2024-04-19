@@ -14,11 +14,11 @@ class MySQL:
             "host":self.app.config['MYSQL_HOST']      
         }
 
-    def connection(self): # проверяет установлено ли соединение | g - глобальная переменная контекста приложения
+    def connection(self):
         if 'db' not in g:
             g.db = mysql.connector.connect(**self.config())
         return g.db
-     
+    
     def close_connection(self, e=None):
         db = g.pop('db', None)
         if db is not None:
