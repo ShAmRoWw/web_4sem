@@ -128,7 +128,7 @@ def show_user(user_id):
 def edit_user(user_id):
     if request.method == 'POST':
         cursor = db.connection().cursor(named_tuple=True)
-        login = request.form['login']
+        #login = request.form['login']
         first_name = request.form['first_name']
         last_name = request.form['last_name']
         middle_name = request.form['middle_name']
@@ -215,16 +215,23 @@ def change_password(user_id):
         if new_password != confirm_password:
             error_messages['confirm_password'] = 'Пароли не совпадают'
 
-        errors = validate_user_data(user.login, new_password, user.first_name, user.last_name)
-        if errors:
-            error_messages.update(errors)
+        # Проверка нового пароля
+        password_errors = validate_user_data(user.login, new_password, user.first_name, user.last_name).get('password', None)
+        if password_errors:
+            error_messages['password'] = password_errors
         
+        print('Error messages:', error_messages)
         if not error_messages:
-            cursor = db.connection().cursor(named_tuple=True)
-            query = 'UPDATE users3 SET password_hash=SHA2(%s, 256) WHERE id=%s'
-            cursor.execute(query, (new_password, user.id))
-            db.connection().commit()
-            cursor.close()
+            try:
+                cursor = db.connection().cursor(named_tuple=True)
+                query = 'UPDATE users3 SET password_hash=SHA2(%s, 256) WHERE id=%s'
+                cursor.execute(query, (new_password, user.id))
+                db.connection().commit()
+            except Exception as e:
+                print("Ошибка обновления пароля:", e)
+                flash('Произошла ошибка при смене пароля', 'danger')
+            finally:
+                cursor.close()
             flash('Пароль успешно изменен', 'success')
             return redirect(url_for('index'))
 
