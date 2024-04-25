@@ -1,4 +1,4 @@
-from flask import Flask, render_template,url_for, request, session, redirect, flash
+from flask import Flask, render_template, url_for, request, session, redirect, flash
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from mysql_db import MySQL
 import re
@@ -168,24 +168,41 @@ def delete_user(user_id):
 
 def validate_user_data(login, password, first_name, last_name):
     errors = {}
-    if not login or not password or not first_name or not last_name:
-        if not login:
-            errors['login'] = "Логин не может быть пустым"
-        if not password:
-            errors['password'] = "Пароль не может быть пустым"
-        if not first_name:
-            errors['first_name'] = "Имя не может быть пустым"
-        if not last_name:
-            errors['last_name'] = "Фамилия не может быть пустой"
+    # Проверка на наличие пустых значений
+    if not login:
+        errors['login'] = "Логин не может быть пустым"
+    if not password:
+        errors['password'] = "Пароль не может быть пустым"
+    if not first_name:
+        errors['first_name'] = "Имя не может быть пустым"
+    if not last_name:
+        errors['last_name'] = "Фамилия не может быть пустой"
+
+    # Проверка логина
     if login and (len(login) < 5 or not re.match("^[a-zA-Z0-9]+$", login)):
         errors['login'] = "Логин должен состоять только из латинских букв и цифр и иметь длину не менее 5 символов"
-    if password and (len(password) < 8 or len(password) > 128 or not re.search(r"[a-zA-Zа-яА-Я]", password) or not re.search(r"[0-9]", password) or ' ' in password or not re.search(r"[~!?@#$%^&*()_+\[\]{}><\\|\"',.:;/-]", password)):
-        errors['password'] = "Пароль должен быть от 8 до 128 символов, содержать минимум одну заглавную и одну строчную букву, одну цифру и допустимые спецсимволы"
+
+    # Проверка пароля
+    if password:
+        if ' ' in password:
+            errors['password'] = "Пароль не должен содержать пробелы"
+        elif len(password) < 8:
+            errors['password'] = "Пароль должен содержать не менее 8 символов"
+        elif len(password) > 128:
+            errors['password'] = "Пароль не должен превышать 128 символов"
+        elif not re.search(r"[A-ZА-Я]", password) or not re.search(r"[a-zа-я]", password):
+            errors['password'] = "Пароль должен содержать как минимум одну заглавную и одну строчную букву"
+        elif not re.search(r"[0-9]", password):
+            errors['password'] = "Пароль должен содержать минимум одну цифру"
+        elif not re.match(r"^[a-zA-Zа-яА-Я0-9~!?@#$%^&*()_\-\+\[\]{}><\\|\"',.:;/]+$", password):
+            errors['password'] = "Пароль содержит недопустимые символы"
+        
     return errors
 
 @app.route('/change_password/<int:user_id>', methods=["GET", "POST"])
 @login_required
 def change_password(user_id):
+    error_messages = {}
     if request.method == 'POST':
         old_password = request.form['old_password']
         new_password = request.form['new_password']
@@ -193,28 +210,25 @@ def change_password(user_id):
         
         user = load_user(user_id)
         if not user or not check_password_hash(user.password_hash, old_password):
-            flash('Старый пароль указан неверно', 'danger')
-            return render_template('change_password.html')
+            error_messages['old_password'] = 'Старый пароль указан неверно'
         
         if new_password != confirm_password:
-            flash('Пароли не совпадают', 'danger')
-            return render_template('change_password.html')
+            error_messages['confirm_password'] = 'Пароли не совпадают'
 
         errors = validate_user_data(user.login, new_password, user.first_name, user.last_name)
         if errors:
-            for error in errors.items():
-                flash(f'{error}', 'danger')
-            return render_template('change_password.html')
+            error_messages.update(errors)
         
-        cursor = db.connection().cursor(named_tuple=True)
-        query = 'UPDATE users3 SET password_hash=SHA2(%s, 256) WHERE id=%s'
-        cursor.execute(query, (new_password, user.id))
-        db.connection().commit()
-        cursor.close()
-        flash('Пароль успешно изменен', 'success')
-        return redirect(url_for('index'))
+        if not error_messages:
+            cursor = db.connection().cursor(named_tuple=True)
+            query = 'UPDATE users3 SET password_hash=SHA2(%s, 256) WHERE id=%s'
+            cursor.execute(query, (new_password, user.id))
+            db.connection().commit()
+            cursor.close()
+            flash('Пароль успешно изменен', 'success')
+            return redirect(url_for('index'))
 
-    return render_template('change_password.html')
+    return render_template('change_password.html', error_messages=error_messages)
 
 def check_password_hash(stored_password_hash, provided_password):
     provided_password_hash = hashlib.sha256(provided_password.encode()).hexdigest()
