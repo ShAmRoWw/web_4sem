@@ -6,7 +6,6 @@ from check_rights import CheckRights
 import math
 import csv
 from io import StringIO, BytesIO
-import pandas as pd
 
 
 bp_eventlist = Blueprint('eventlist', __name__, url_prefix='/eventlist')
@@ -74,13 +73,25 @@ def show_path():
 @login_required
 def show_path_user():
     cursor = db.connection().cursor(named_tuple=True)
-    query = '''
-    SELECT COUNT(*) as count, el.user_id, u.first_name, u.last_name
-    FROM eventlist el
-    LEFT JOIN users3 u ON el.user_id = u.id
-    GROUP BY el.user_id, u.first_name, u.last_name
-    '''
-    cursor.execute(query)
+    
+    if current_user.role_id == CheckRights.ADMIN_ROLE_ID:
+        query = '''
+        SELECT COUNT(*) as count, el.user_id, u.first_name, u.last_name
+        FROM eventlist el
+        LEFT JOIN users3 u ON el.user_id = u.id
+        GROUP BY el.user_id, u.first_name, u.last_name
+        '''
+        cursor.execute(query)
+    else:
+        query = '''
+        SELECT COUNT(*) as count, el.user_id, u.first_name, u.last_name
+        FROM eventlist el
+        LEFT JOIN users3 u ON el.user_id = u.id
+        WHERE el.user_id = %s
+        GROUP BY el.user_id, u.first_name, u.last_name
+        '''
+        cursor.execute(query, (current_user.id,))
+    
     events = cursor.fetchall()
     cursor.close()
     return render_template('visits/event_path_user.html', events=events)
@@ -89,46 +100,68 @@ def show_path_user():
 @login_required
 def show_path_site():
     cursor = db.connection().cursor(named_tuple=True)
-    query = 'SELECT COUNT(*) as count, path FROM eventlist GROUP BY path'
-    cursor.execute(query)
+    query = '''
+        SELECT COUNT(*) as count, path 
+        FROM eventlist 
+        WHERE user_id = %s 
+        GROUP BY path
+    '''
+    cursor.execute(query, (current_user.id,))
     events = cursor.fetchall()
     cursor.close()
-    return render_template('visits/event_path_site.html', events = events)
+    return render_template('visits/event_path_site.html', events=events)
 
 @bp_eventlist.route("/csvsave")
 def save_to_csv():
+    template = request.args.get('template')
     cursor = db.connection().cursor()
     
     output = StringIO()
     writer = csv.writer(output)
 
-    # Данные о всех посещениях
-    cursor.execute('SELECT id, user_id, path FROM eventlist')
-    logs = cursor.fetchall()
-    writer.writerow(['Журнал посещений'])
-    writer.writerow(['ID', 'ID Пользователя', 'Путь'])
-    for log in logs:
-        writer.writerow([log[0], log[1], log[2]])
+    if template == 'user':
+        # Данные по страницам для текущего пользователя
+        query = '''
+            SELECT COUNT(*) as count, path 
+            FROM eventlist 
+            WHERE user_id = %s 
+            GROUP BY path
+        '''
+        cursor.execute(query, (current_user.id,))
+        path_events = cursor.fetchall()
+        writer.writerow(['Журнал по страницам для пользователя'])
+        writer.writerow(['Количество посещений', 'Путь'])
+        for event in path_events:
+            writer.writerow([event[0], event[1]])
 
-    writer.writerow([])  # Пустая строка для разделения
+    elif template == 'all':
+        # Данные о всех посещениях
+        cursor.execute('SELECT id, user_id, path FROM eventlist')
+        logs = cursor.fetchall()
+        writer.writerow(['Журнал посещений'])
+        writer.writerow(['ID', 'ID Пользователя', 'Путь'])
+        for log in logs:
+            writer.writerow([log[0], log[1], log[2]])
 
-    # Данные по пользователям
-    cursor.execute('SELECT COUNT(*) as count, user_id FROM eventlist GROUP BY user_id')
-    user_events = cursor.fetchall()
-    writer.writerow(['Журнал по пользователям'])
-    writer.writerow(['Количество посещений', 'ID Пользователя'])
-    for event in user_events:
-        writer.writerow([event[0], event[1]])
+        writer.writerow([])  # Пустая строка для разделения
 
-    writer.writerow([])
+        # Данные по пользователям
+        cursor.execute('SELECT COUNT(*) as count, user_id FROM eventlist GROUP BY user_id')
+        user_events = cursor.fetchall()
+        writer.writerow(['Журнал по пользователям'])
+        writer.writerow(['Количество посещений', 'ID Пользователя'])
+        for event in user_events:
+            writer.writerow([event[0], event[1]])
 
-    # Данные по страницам
-    cursor.execute('SELECT COUNT(*) as count, path FROM eventlist GROUP BY path')
-    path_events = cursor.fetchall()
-    writer.writerow(['Журнал по страницам'])
-    writer.writerow(['Количество посещений', 'Путь'])
-    for event in path_events:
-        writer.writerow([event[0], event[1]])
+        writer.writerow([])
+
+        # Данные по страницам
+        cursor.execute('SELECT COUNT(*) as count, path FROM eventlist GROUP BY path')
+        path_events = cursor.fetchall()
+        writer.writerow(['Журнал по страницам'])
+        writer.writerow(['Количество посещений', 'Путь'])
+        for event in path_events:
+            writer.writerow([event[0], event[1]])
 
     cursor.close()
 
@@ -139,7 +172,7 @@ def save_to_csv():
 
     return send_file(
         output_bytes, 
-        download_name="logs.csv", 
+        download_name="logs.csv" if template == 'all' else "user_logs.csv", 
         as_attachment=True, 
         mimetype='text/csv'
     )

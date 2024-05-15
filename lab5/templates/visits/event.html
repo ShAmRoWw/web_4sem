@@ -30,7 +30,7 @@
             {% endfor %}
         </tbody>
     </table>
-    <a href="{{url_for('eventlist.save_to_csv')}}" class="btn btn-success mb-4">Сохранить в CSV</a>
+    <a href="{{ url_for('eventlist.save_to_csv', template='all') }}" class="btn btn-success mb-4">Сохранить в CSV</a>
 </div>
 
 {{ pagination(count, page) }}

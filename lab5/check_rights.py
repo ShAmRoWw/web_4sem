@@ -1,6 +1,7 @@
 from flask_login import current_user
 
 class CheckRights:
+    ADMIN_ROLE_ID = 1
     USER_ROLE_ID = 2
 
     def __init__(self, record):
